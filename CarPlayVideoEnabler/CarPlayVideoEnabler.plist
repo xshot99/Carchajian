@@ -1,1 +1,0 @@
-{ Filter = { Bundles = ( "com.apple.SpringBoard", "com.apple.carplay", "com.google.ios.youtube", "com.netflix.Netflix", "com.apple.mobilesafari" ); }; }
