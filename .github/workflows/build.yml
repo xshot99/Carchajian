@@ -1,0 +1,179 @@
+name: 编译 CarPlayVideoEnabler (dylib + deb)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'CarPlayVideoEnabler/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 产物 1: 独立 .dylib (纯 ObjC 运行时, 零依赖, TrollFools 注入用)
+      # ============================================================
+      - name: 编译独立 dylib (arm64 + arm64e)
+        working-directory: CarPlayVideoEnabler
+        run: |
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK_PATH"
+
+          mkdir -p build
+
+          clang -arch arm64 \
+              -isysroot "$SDK_PATH" \
+              -miphoneos-version-min=14.0 \
+              -dynamiclib \
+              -fobjc-arc \
+              -framework Foundation \
+              -framework UIKit \
+              -framework CoreLocation \
+              -o build/CarPlayVideoEnabler_arm64.dylib \
+              CarPlayVideoEnabler_standalone.m
+
+          clang -arch arm64e \
+              -isysroot "$SDK_PATH" \
+              -miphoneos-version-min=14.0 \
+              -dynamiclib \
+              -fobjc-arc \
+              -framework Foundation \
+              -framework UIKit \
+              -framework CoreLocation \
+              -o build/CarPlayVideoEnabler_arm64e.dylib \
+              CarPlayVideoEnabler_standalone.m
+
+          lipo -create \
+              build/CarPlayVideoEnabler_arm64.dylib \
+              build/CarPlayVideoEnabler_arm64e.dylib \
+              -output build/CarPlayVideoEnabler.dylib
+
+          rm build/CarPlayVideoEnabler_arm64.dylib build/CarPlayVideoEnabler_arm64e.dylib
+          echo "独立 dylib 编译完成"
+          file build/CarPlayVideoEnabler.dylib
+
+      # ============================================================
+      # 产物 2: .deb 包 (越狱设备用, Theos 编译 dylib + dpkg-deb 打包)
+      # ============================================================
+      - name: 安装编译依赖
+        run: |
+          brew install make dpkg ldid
+
+      - name: 安装 Theos 并编译 dylib
+        working-directory: CarPlayVideoEnabler
+        run: |
+          git clone --depth 1 https://github.com/theos/theos.git ~/theos
+
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          SDK_VER=$(xcrun --sdk iphoneos --show-sdk-version)
+          mkdir -p ~/theos/sdks
+          ln -sf "$SDK_PATH" ~/theos/sdks/iPhoneOS${SDK_VER}.sdk
+
+          export THEOS=~/theos
+          gmake
+
+          echo "=== 检查编译产物 ==="
+          ls -lh .theos/obj/debug/
+          file .theos/obj/debug/CarPlayVideoEnabler.dylib
+
+      - name: 打包 rootful .deb
+        working-directory: CarPlayVideoEnabler
+        run: |
+          DYLIB=".theos/obj/debug/CarPlayVideoEnabler.dylib"
+          DEB_DIR="deb_rootful"
+          INSTALL_DIR="$DEB_DIR/Library/MobileSubstrate/DynamicLibraries"
+          mkdir -p "$INSTALL_DIR"
+          mkdir -p "$DEB_DIR/DEBIAN"
+
+          cp "$DYLIB" "$INSTALL_DIR/"
+          cp CarPlayVideoEnabler.plist "$INSTALL_DIR/"
+
+          cat > "$DEB_DIR/DEBIAN/control" << 'CTRL'
+Package: com.monkeycode.carplayvideoenabler
+Name: CarPlayVideoEnabler
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: 解除CarPlay视频播放限制,绕过速度检测
+Maintainer: MonkeyCode
+Author: MonkeyCode
+Section: Tweaks
+Depends: mobilesubstrate
+CTRL
+
+          dpkg-deb --build "$DEB_DIR" artifacts/CarPlayVideoEnabler_rootful.deb
+          rm -rf "$DEB_DIR"
+          echo "rootful .deb 打包完成"
+
+      - name: 打包 rootless .deb
+        working-directory: CarPlayVideoEnabler
+        run: |
+          DYLIB=".theos/obj/debug/CarPlayVideoEnabler.dylib"
+          DEB_DIR="deb_rootless"
+          INSTALL_DIR="$DEB_DIR/var/jb/Library/MobileSubstrate/DynamicLibraries"
+          mkdir -p "$INSTALL_DIR"
+          mkdir -p "$DEB_DIR/DEBIAN"
+
+          cp "$DYLIB" "$INSTALL_DIR/"
+          cp CarPlayVideoEnabler.plist "$INSTALL_DIR/"
+
+          cat > "$DEB_DIR/DEBIAN/control" << 'CTRL'
+Package: com.monkeycode.carplayvideoenabler
+Name: CarPlayVideoEnabler
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: 解除CarPlay视频播放限制,绕过速度检测
+Maintainer: MonkeyCode
+Author: MonkeyCode
+Section: Tweaks
+Depends: mobilesubstrate
+CTRL
+
+          dpkg-deb --build "$DEB_DIR" artifacts/CarPlayVideoEnabler_rootless.deb
+          rm -rf "$DEB_DIR"
+          echo "rootless .deb 打包完成"
+
+      # ============================================================
+      # 整理产物
+      # ============================================================
+      - name: 整理产物
+        working-directory: CarPlayVideoEnabler
+        run: |
+          mkdir -p artifacts
+          cp build/CarPlayVideoEnabler.dylib artifacts/
+
+          echo "=== 产物清单 ==="
+          ls -lh artifacts/
+          echo ""
+          echo "=== dylib 架构信息 ==="
+          file artifacts/CarPlayVideoEnabler.dylib
+          echo ""
+          echo "=== deb 信息 ==="
+          dpkg-deb --info artifacts/CarPlayVideoEnabler_rootful.deb
+          echo ""
+          dpkg-deb --info artifacts/CarPlayVideoEnabler_rootless.deb
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarPlayVideoEnabler-编译产物
+          path: |
+            CarPlayVideoEnabler/artifacts/CarPlayVideoEnabler.dylib
+            CarPlayVideoEnabler/artifacts/CarPlayVideoEnabler_rootful.deb
+            CarPlayVideoEnabler/artifacts/CarPlayVideoEnabler_rootless.deb
+
+      - name: 上传到 Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            CarPlayVideoEnabler/artifacts/CarPlayVideoEnabler.dylib
+            CarPlayVideoEnabler/artifacts/CarPlayVideoEnabler_rootful.deb
+            CarPlayVideoEnabler/artifacts/CarPlayVideoEnabler_rootless.deb
