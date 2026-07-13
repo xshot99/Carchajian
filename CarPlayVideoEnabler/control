@@ -1,0 +1,9 @@
+Package: com.monkeycode.carplayvideoenabler
+Name: CarPlayVideoEnabler
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: 解除 CarPlay 视频播放限制，绕过速度检测，让行车时也能正常播放视频
+Maintainer: MonkeyCode
+Author: MonkeyCode
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 14.0)
